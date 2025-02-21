@@ -1,117 +1,180 @@
-import argparse
-import subprocess
-import os
-import sys
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.models import SystemMessage, UserMessage, TextContentItem
-from azure.core.credentials import AzureKeyCredential
+#!/usr/bin/env python3
+"""
+Code Review Tool
+---------------
 
-def run_git_command(cmd, repo_path):
-    """Run a git command in the specified repository path and return the output, or exit on error."""
+A tool for automated code review using Azure OpenAI GPT-4 model. Ensure you have checked
+out the branch in the repo you want to review before running this script.
+
+Usage:
+    python code_review.py --git-dir=<path_to_git_dir> --work-tree=<path_to_work_tree>
+
+Example:
+    python code_review.py --git-dir="C:/src/project/.git" --work-tree="C:/src/project"
+
+Requirements:
+    - Python 3.8+
+    - Azure OpenAI API access
+    - Environment variables:
+        AZUREAI_ENDPOINT: Azure OpenAI endpoint URL
+        AZUREAI_KEY: Azure OpenAI API key
+        AZUREAI_API_VERSION: Azure OpenAI API version
+
+Dependencies:
+    - tiktoken
+    - openai
+    - python-dotenv
+"""
+
+import argparse
+import os
+import subprocess
+import tiktoken
+from openai import AzureOpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def count_tokens(text: str) -> int:
+    """
+    Count the number of tokens in a string using GPT-4's tokenizer.
+
+    Args:
+        text (str): The input text to tokenize
+
+    Returns:
+        int: Number of tokens in the text
+    """
+    # Use the GPT-4 encoder
+    encoder = tiktoken.encoding_for_model("gpt-4")
+
+    # Encode the text and return the token count
+    tokens = encoder.encode(text)
+    return len(tokens)
+
+
+def get_code_review_prompt(code: str) -> str:
+    endpoint = os.getenv("AZUREAI_ENDPOINT")
+    key = os.getenv("AZUREAI_KEY")
+    api_version = os.getenv("AZUREAI_API_VERSION")
+
+    client = AzureOpenAI(azure_endpoint=endpoint, api_key=key, api_version=api_version)
+
+    prompt = """
+You are an AI Code Reviewer tasked with thoroughly reviewing a pull request (PR) for a software project. Your review should cover the following aspects:
+
+1. Correctness:
+   - Check if the code does what it's supposed to do.
+   - Verify that edge cases are handled properly.
+
+2. Logic Errors:
+   - Identify any conditions or algorithms that may lead to unexpected behavior.
+   - Highlight parts of the code where the flow or logic is unclear or may cause errors.
+
+3. Potential Bugs:
+   - Look for any possible bugs or issues that might arise during runtime.
+   - Point out areas where error handling or input validation is missing or insufficient.
+
+4. Specific Recommendations:
+   - For each identified issue, provide concrete, actionable suggestions (e.g., "Change this conditional to prevent a null pointer exception," or "Refactor this loop to improve performance.").
+   - If possible, suggest adding tests or clarifying comments to better document the code's intent.
+
+5. Best Practices:
+   - Comment on any deviations from common coding standards or best practices.
+   - Recommend improvements in code style or structure if necessary.
+   
+6. Code specifics:
+    - Provide a line-by-line review of the code, pointing out specific lines or blocks that need attention.
+    - inlucde  file name and line number in the review.
+
+Make sure your review is clear, concise, and uses simple language suitable for someone with an undergraduate-level understanding of programming. Your final output should be organized into sections like "Issues Found" and "Recommended Actions." Be constructive and focus on actionable changes.
+"""
+
+    response = client.chat.completions.create(
+        messages=[{"role": "user", "content": f"{prompt} {code}"}], model="gpt-4o"
+    )
+    
+    # Write review results to file
+    with open("review.md", "w", encoding="utf-8") as file:
+        file.write(response.choices[0].message.content)
+
+    print(response.choices[0].message.content)
+
+
+def get_git_diff(git_dir: str, work_tree: str, branch: str = "main") -> str:
+    """
+    Get git diff output as a string using subprocess.
+
+    Args:
+        git_dir (str): Path to .git directory
+        work_tree (str): Path to working tree
+        branch (str): Branch to diff against, defaults to 'main'
+
+    Returns:
+        str: Git diff output
+    """
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=repo_path,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        # Get git status first and print to console
+        status = subprocess.run(
+            ["git", f"--git-dir={git_dir}", f"--work-tree={work_tree}", "branch"],
+            capture_output=True,
             text=True,
             check=True
         )
-        return result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        print(f"Error running command: {' '.join(cmd)} in {repo_path}")
-        print(e.stderr)
-        sys.exit(1)
+        print(status.stdout)
+        
+        # The current branch will have an asterisk (*)
+        current_branch = None
+        for line in status.stdout.splitlines():
+            if line.startswith('*'):
+                current_branch = line.lstrip('* ').strip()
+                break
 
-def checkout_branch(repo_path, branch):
-    """
-    Check out the specified branch. If it doesn't exist locally, attempt to create it
-    by tracking the remote branch from 'origin'.
-    """
-    # Check if branch exists locally.
-    proc = subprocess.run(
-        ["git", "rev-parse", "--verify", branch],
-        cwd=repo_path,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    if proc.returncode == 0:
-        # Branch exists locally, so simply check it out.
-        run_git_command(["git", "checkout", branch], repo_path)
-    else:
-        # Branch doesn't exist locally; try checking it out from origin.
-        print(f"Branch '{branch}' not found locally. Attempting to check out from origin...")
-        run_git_command(["git", "checkout", "-b", branch, f"origin/{branch}"], repo_path)
-
-def main():
-    # Parse command-line arguments.
-    parser = argparse.ArgumentParser(
-        description="Pull a branch, diff against main, and perform a code review using Azure AI Inference."
-    )
-    parser.add_argument("branch", help="Name of the branch to review")
-    parser.add_argument("repo_path", help="Path to the git repository")
-    args = parser.parse_args()
-
-    branch = args.branch
-    repo_path = args.repo_path
-
-    # Validate the repository path.
-    if not os.path.exists(repo_path):
-        print(f"Error: The repository path '{repo_path}' does not exist.")
-        sys.exit(1)
-    if not os.path.isdir(os.path.join(repo_path, ".git")):
-        print(f"Error: '{repo_path}' is not a valid git repository.")
-        sys.exit(1)
-
-    # Check for the Azure credential (using GITHUB_TOKEN as per the guide).
-    if not os.getenv("GITHUB_TOKEN"):
-        print("Error: GITHUB_TOKEN environment variable not set.")
-        sys.exit(1)
-
-    # Set up the Azure ChatCompletionsClient.
-    client = ChatCompletionsClient(
-        endpoint="https://models.inference.ai.azure.com",
-        credential=AzureKeyCredential(os.environ["GITHUB_TOKEN"]),
-    )
-
-    print(f"Switching to branch '{branch}' and pulling latest changes in repo '{repo_path}'...")
-    checkout_branch(repo_path, branch)
-    pull_output = run_git_command(["git", "pull", "origin", branch], repo_path)
-    print(pull_output)
-
-    print("Generating diff against the main branch...")
-    diff_output = run_git_command(["git", "diff", "main", branch], repo_path)
-    
-    if not diff_output:
-        print("No differences found between the branches.")
-        sys.exit(0)
-
-    # Construct the prompt for code review.
-    review_prompt = (
-        "Please review the following git diff and provide detailed code review suggestions with potential improvements:\n\n"
-        + diff_output
-    )
-
-    print("Sending diff to Azure AI for code review...")
-    try:
-        response = client.complete(
-            messages=[
-                SystemMessage(content="You are a helpful code reviewer."),
-                UserMessage(content=[TextContentItem(text=review_prompt)]),
-            ],
-            model="o1",
-            max_tokens=2048,
-            temperature=0.2,
-            top_p=0.1,
+        print(current_branch)
+        
+        common_ansestor = subprocess.run(
+            ["git", f"--git-dir={git_dir}", f"--work-tree={work_tree}", "merge-base", current_branch, branch],
+            capture_output=True,
+            text=True,
+            check=True
         )
-        review = response.choices[0].message.content
-        print("\n--- Code Review ---")
-        print(review)
-    except Exception as e:
-        print("An error occurred while communicating with Azure AI:")
-        print(e)
-        sys.exit(1)
+        print(status.stdout)
+        
+        result = subprocess.run(
+            ["git", f"--git-dir={git_dir}", f"--work-tree={work_tree}", "diff", common_ansestor.stdout.strip()],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        print(f"Error running git diff: {e}")
+        return ""
+
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Code review tool")
+    parser.add_argument(
+        "--git-dir", type=str, required=True, help="Path to .git directory"
+    )
+    parser.add_argument(
+        "--work-tree", type=str, required=True, help="Path to working tree"
+    )
+    args = parser.parse_args()
+
+    git_dir = args.git_dir
+    work_tree = args.work_tree
+
+    # Get git diff output
+    diff_output = get_git_diff(git_dir, work_tree)
+    
+    # Write git diff output to file
+    with open("git.diff", "w", encoding="utf-8") as file:
+        file.write(diff_output)
+
+    # with open("main.diff", "r") as file:
+    #     text = file.read()
+    token_count = count_tokens(diff_output)
+    print(f"Token count: {token_count}")
+    get_code_review_prompt(diff_output)
