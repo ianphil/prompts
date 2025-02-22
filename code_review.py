@@ -61,38 +61,12 @@ def get_code_review_prompt(code: str) -> str:
 
     client = AzureOpenAI(azure_endpoint=endpoint, api_key=key, api_version=api_version)
 
-    prompt = """
-You are an AI Code Reviewer tasked with thoroughly reviewing a pull request (PR) for a software project. Your review should cover the following aspects:
-
-1. Correctness:
-   - Check if the code does what it's supposed to do.
-   - Verify that edge cases are handled properly.
-
-2. Logic Errors:
-   - Identify any conditions or algorithms that may lead to unexpected behavior.
-   - Highlight parts of the code where the flow or logic is unclear or may cause errors.
-
-3. Potential Bugs:
-   - Look for any possible bugs or issues that might arise during runtime.
-   - Point out areas where error handling or input validation is missing or insufficient.
-
-4. Specific Recommendations:
-   - For each identified issue, provide concrete, actionable suggestions (e.g., "Change this conditional to prevent a null pointer exception," or "Refactor this loop to improve performance.").
-   - If possible, suggest adding tests or clarifying comments to better document the code's intent.
-
-5. Best Practices:
-   - Comment on any deviations from common coding standards or best practices.
-   - Recommend improvements in code style or structure if necessary.
-   
-6. Code specifics:
-    - Provide a line-by-line review of the code, pointing out specific lines or blocks that need attention.
-    - inlucde  file name and line number in the review.
-
-Make sure your review is clear, concise, and uses simple language suitable for someone with an undergraduate-level understanding of programming. Your final output should be organized into sections like "Issues Found" and "Recommended Actions." Be constructive and focus on actionable changes.
-"""
+    # Read the prompt from XML file
+    with open("code_review_prompt.xml", "r", encoding="utf-8") as file:
+        prompt = file.read()
 
     response = client.chat.completions.create(
-        messages=[{"role": "user", "content": f"{prompt} {code}"}], model="gpt-4o"
+        messages=[{"role": "user", "content": f"{prompt} {code}"}], model="gpt-4"
     )
     
     # Write review results to file
